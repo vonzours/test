@@ -1,0 +1,83 @@
+name: Run Local Sentiment Model (Headless)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run-model:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch transformers
+
+      - name: Create headless runner
+        run: |
+          cat << 'EOF' > headless_runner.py
+          import torch
+          import torch.nn as nn
+          from transformers import AutoTokenizer, AutoModel
+
+          embedding_dim = 768
+          hidden_dim = 128
+          num_classes = 2
+
+          class LSTMClassifier(nn.Module):
+              def __init__(self, embedding_dim, hidden_dim, num_classes):
+                  super().__init__()
+                  self.lstm = nn.LSTM(
+                      embedding_dim, hidden_dim,
+                      batch_first=True, bidirectional=True
+                  )
+                  self.fc = nn.Linear(hidden_dim*2, num_classes)
+
+              def forward(self, embeddings):
+                  lstm_out, _ = self.lstm(embeddings)
+                  return self.fc(lstm_out[:, -1, :])
+
+          print("Loading tokenizer and BERT...")
+          tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased")
+          bert = AutoModel.from_pretrained("distilbert-base-uncased")
+          bert.eval()
+
+          print("Loading local LSTM weights...")
+          lstm_path = "lstm_distilbert_state.pth"
+          model = LSTMClassifier(embedding_dim, hidden_dim, num_classes)
+          model.load_state_dict(torch.load(lstm_path, map_location="cpu"))
+          model.eval()
+
+          def predict(text):
+              tokens = tokenizer(
+                  text, truncation=True, padding=True,
+                  return_tensors="pt", max_length=128
+              )
+              with torch.no_grad():
+                  bert_out = bert(
+                      input_ids=tokens["input_ids"],
+                      attention_mask=tokens["attention_mask"]
+                  ).last_hidden_state
+                  logits = model(bert_out)
+                  probs = torch.softmax(logits, dim=1)
+                  label = torch.argmax(probs, dim=1).item()
+              return label, float(probs[0][label])
+
+          if __name__ == "__main__":
+              sentence = "I love this product!"
+              label, conf = predict(sentence)
+              print("Sentence:", sentence)
+              print("Prediction:", "POSITIVE" if label==1 else "NEGATIVE", conf)
+          EOF
+
+      - name: Run test
+        run: |
+          python headless_runner.py
