@@ -1,0 +1,38 @@
+name: Train Sentiment Model
+
+on:
+  workflow_dispatch:  # déclenchement manuel
+
+jobs:
+  train-model:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch transformers
+
+      - name: Run training script
+        run: |
+          python train.py
+
+      - name: Commit and push trained model
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add model.pth
+          git commit -m "Update trained model"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
